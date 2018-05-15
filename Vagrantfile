@@ -41,7 +41,7 @@ Vagrant.configure(2) do |config|
     node.vm.hostname = "collector"
     node.vm.network "private_network", ip: "10.0.0.3", virtualbox_intnet: "ext"
     node.vm.provision "shell", inline: <<-SHELL
-      sudo apt install python3 python3-pip
+      sudo apt install -y python3 python3-pip
       sudo pip3 install ipdb
     SHELL
     node.vm.provision "shell", run: "always", inline: <<-SHELL
