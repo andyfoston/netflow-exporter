@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+"""
+Script to receive Netflow packets over UDP and send push them via HTTP(S) to a
+REST API endpoint  (Not impletement yet).
+"""
 
 import asyncio
 import logging
@@ -15,8 +19,9 @@ PROTOCOLS_BY_ID = {getattr(socket, n): n.replace("IPPROTO_", "")
                    for n in dir(socket) if n.startswith("IPPROTO")}
 
 def setup_logging():
+    """ Setup file-based and stderr-based logging."""
     def _get_filename():
-        # Determine file to log to.
+        """ Returns the name of the running script, minus the file extension. """
         try:
             main = os.path.abspath(sys.modules["__main__"].__file__)
         except AttributeError:
@@ -44,10 +49,12 @@ def setup_logging():
 setup_logging()
 
 class TCPFlags:
+    """ Represents a TCP flags integer."""
     def __init__(self, flags):
         self.flags = flags
 
     def get_flags(self):
+        """ Returns the flags as a list of flag names. """
         assigned_flags = []
         if self.flags & 32:
             assigned_flags.append("URG")
@@ -64,9 +71,12 @@ class TCPFlags:
         return ", ".join(assigned_flags)
 
     def __int__(self):
+        """ Returns the integer representation of the flags. """
         return self.flags
 
     def __str__(self):
+        """ Returns the integer representation of the flags, along with the
+        names associated with each flag bit. """
         return "%d (%s)" % (self.flags, self.get_flags())
 
     def __repr__(self):
@@ -74,6 +84,7 @@ class TCPFlags:
 
 
 class TemplateField(namedtuple("TemplateField", "field_type_id bytes")):
+    """ Represents a field within a NetFlow template. """
     FORMAT = {0: "x",  # O == unused byte
               1: "B", 2: "H", 4: "I", 8: "Q"}
     TYPES = {1: "in_bytes",
@@ -165,13 +176,16 @@ class TemplateField(namedtuple("TemplateField", "field_type_id bytes")):
 
     @property
     def name(self):
+        """ Returns the name of the field based on the field_type_id parameter. """
         return self.TYPES.get(self.field_type_id, "unknown (%d)" % self.field_type_id)
 
     @property
     def struct_format(self):
+        """ Returns the struct character to be used to parse this field. """
         return self.FORMAT[self.bytes]
 
     def parse_field(self, data):
+        """ Returns the correct representation of data based on the field name. """
         name = self.name
         if name == "tcp_flags":
             return TCPFlags(data)
@@ -185,25 +199,33 @@ class TemplateField(namedtuple("TemplateField", "field_type_id bytes")):
 
 
 class HeaderTemplateField(namedtuple("HeaderTemplateField", "name bytes")):
+    """ Represents a header field within a NetFlow template. """
     FORMAT = {0: "x",  # O == unused byte
               1: "B", 2: "H", 4: "I", 8: "Q"}
 
     @property
     def struct_format(self):
+        """ Returns the struct character to be used to parse this header field. """
         return self.FORMAT[self.bytes]
 
     def parse_field(self, data):
+        """ Returns the correct representation of data based on the field name. """
         if self.name == "sys_uptime":
             return timedelta(microseconds=int(data))
         return data
 
 
 class Template:
+    """ Represents a Netflow template. Contains one or more template fields. """
     HEADER_TEMPLATES = {}
     TEMPLATES = {}
     STATIC_TEMPLATES = {}
 
     def __init__(self, fields, expires=True):
+        """
+        Sets the fields, along with an expiry date to be used when the template
+        is a dynamic template.
+        """
         self.fields = fields
         if expires:
             self.expiry = datetime.now() + timedelta(hours=1)
@@ -212,15 +234,27 @@ class Template:
 
     @property
     def struct_format(self):
+        """
+        Returns the struct format to be used to parse all the fields within this
+        template.
+        """
         return ">%s" % "".join(f.struct_format for f in self.fields)
 
     @property
     def fields_with_data(self):
+        """
+        Returns an iterator of fields that contain data. i.e. ignores padding
+        characters.
+        """
         for field in self.fields:
             if field.bytes > 0:
                 yield field
 
     def parse_data(self, data, offset=0):
+        """
+        Parses the raw data and returns a dict of field names to associated
+        values.
+        """
         data = struct.unpack_from(self.struct_format, data, offset=offset)
         result = OrderedDict((f.name, f.parse_field(data[i]))
                              for i, f in enumerate(self.fields_with_data)
@@ -234,14 +268,27 @@ class Template:
 
     @property
     def bytes(self):
+        """
+        Returns the number of bytes used by the template.
+
+        Fields with bytes of less than one (padding char representations) will
+        be treated as one byte.
+        """
         return sum(max(f.bytes, 1) for f in self.fields)
 
     @classmethod
     def create_template(cls, remote_addr, data, offset):
+        """
+        Creates a template from the provided raw data.
+
+        Returns a tuple containing the template, along with the number of bytes
+        that contained the template definition.
+        """
         template_id, count = struct.unpack_from(">HH", data, offset=offset)
-        template = cls(fields=[
-            TemplateField(*struct.unpack_from(">HH", data, offset=offset + (i * 4)))
-            for i in range(1, count + 1)]
+        template = cls(
+            fields=[
+                TemplateField(*struct.unpack_from(">HH", data, offset=offset + (i * 4)))
+                for i in range(1, count + 1)]
         )
         cls.TEMPLATES[(remote_addr, template_id)] = template
         return template, count * 4
@@ -295,16 +342,27 @@ Template.STATIC_TEMPLATES[5] = Template(expires=False, fields=[
 
 
 class NetflowServerProtocol:
-    def connection_made(self, _):
-        pass
+    """
+    Receives Netflow datagrams from asyncio and processes them.
+    """
+    # Unused method which must be implemented for asyncio
+    connection_made = lambda *_: None
 
-    def parse_with_static_template(self, version, count, data, offset):
+    @staticmethod
+    def parse_with_static_template(version, count, data, offset):
+        """
+        Parses and logs flows from a static template NetFlow version.
+        i.e. version 5.
+        """
         for _ in range(count):
             template = Template.STATIC_TEMPLATES[version]
             logging.info("Flow: %s", template.parse_data(data, offset=offset))
             offset += template.bytes
 
     def datagram_received(self, data, addr):
+        """
+        Processes the received NetFlow packet.
+        """
         remote_addr, _ = addr
         version, = struct.unpack_from(">H", data)
         logging.info("Version: %d. Remote address: %s", version, remote_addr)
@@ -359,6 +417,13 @@ class NetflowServerProtocol:
 
 @asyncio.coroutine
 def cleanup_old_templates():
+    """
+    Cleans up expired templates.
+
+    Templates are frequently refreshed, so templates that haven't been recreated
+    for an extended period of time are assumed to be no longer in use and are
+    consuming resources unnecessarily.
+    """
     while True:
         yield from asyncio.sleep(CLEANUP_INTERVAL)
         logging.info("Cleaning up old templates")
