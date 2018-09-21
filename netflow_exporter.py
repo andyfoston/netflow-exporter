@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Script to receive Netflow packets over UDP and send push them via HTTP(S) to a
-REST API endpoint  (Not impletement yet).
+REST API endpoint  (Not implemented yet).
 """
 
 import asyncio
@@ -18,20 +18,21 @@ CLEANUP_INTERVAL = 60 * 5
 PROTOCOLS_BY_ID = {getattr(socket, n): n.replace("IPPROTO_", "")
                    for n in dir(socket) if n.startswith("IPPROTO")}
 
+
 def setup_logging():
     """ Setup file-based and stderr-based logging."""
     def _get_filename():
         """ Returns the name of the running script, minus the file extension. """
         try:
-            main = os.path.abspath(sys.modules["__main__"].__file__)
+            name = os.path.abspath(sys.modules["__main__"].__file__)
         except AttributeError:
-            main = "interactive"
-        return os.path.splitext(os.path.basename(main))[0].replace("%", "%%")
+            name = "interactive"
+        return os.path.splitext(os.path.basename(name))[0].replace("%", "%%")
 
     # "2018-05-17 16:09:59,802: logname[processid]: DEBUG: Done"
-    LOG_FORMAT = "%%(asctime)s: %s[%%(process)d]: %%(levelname)s: %%(message)s" % _get_filename()
+    log_format = "%%(asctime)s: %s[%%(process)d]: %%(levelname)s: %%(message)s" % _get_filename()
     logger = logging.getLogger()
-    formatter = logging.Formatter(LOG_FORMAT)
+    formatter = logging.Formatter(log_format)
     console_handle = sys.stderr
     handler = logging.StreamHandler(console_handle)
     handler.setFormatter(formatter)
@@ -46,7 +47,6 @@ def setup_logging():
     for handler in logger.handlers:
         handler.setLevel(logging.DEBUG)
 
-setup_logging()
 
 class TCPFlags:
     """ Represents a TCP flags integer."""
@@ -170,7 +170,7 @@ class TemplateField(namedtuple("TemplateField", "field_type_id bytes")):
              85: "in_permanent_bytes",
              86: "in_permanent_pkts",
              # 87 - Vendor Proprietary
-            }
+             }
 
     TYPE_BY_NAME = {v: k for k, v in TYPES.items()}
 
@@ -258,7 +258,7 @@ class Template:
         data = struct.unpack_from(self.struct_format, data, offset=offset)
         result = OrderedDict((f.name, f.parse_field(data[i]))
                              for i, f in enumerate(self.fields_with_data)
-                            )
+                             )
         if "unix_secs" in result and "unix_nsecs" in result:
             result["timestamp"] = datetime.fromtimestamp(float("%(unix_secs)d.%(unix_nsecs)d" % result))
             del result["unix_secs"]
@@ -345,8 +345,9 @@ class NetflowServerProtocol:
     """
     Receives Netflow datagrams from asyncio and processes them.
     """
-    # Unused method which must be implemented for asyncio
-    connection_made = lambda *_: None
+    def connection_made(self, *_):
+        # Unused method which must be implemented for asyncio
+        pass
 
     @staticmethod
     def parse_with_static_template(version, count, data, offset):
@@ -415,8 +416,8 @@ class NetflowServerProtocol:
                         return
                     processed += 1
 
-@asyncio.coroutine
-def cleanup_old_templates():
+
+async def cleanup_old_templates():
     """
     Cleans up expired templates.
 
@@ -424,40 +425,47 @@ def cleanup_old_templates():
     for an extended period of time are assumed to be no longer in use and are
     consuming resources unnecessarily.
     """
-    while True:
-        yield from asyncio.sleep(CLEANUP_INTERVAL)
-        logging.info("Cleaning up old templates")
-        keys_to_remove = []
-        for key, template in Template.TEMPLATES.items():
-            if template.expiry and template.expiry <= datetime.now():
-                keys_to_remove.append(key)
+    try:
+        while True:
+            await asyncio.sleep(CLEANUP_INTERVAL)
+            logging.info("Cleaning up old templates")
+            keys_to_remove = []
+            for key, template in Template.TEMPLATES.items():
+                if template.expiry and template.expiry <= datetime.now():
+                    keys_to_remove.append(key)
 
-        for key in keys_to_remove:
-            logging.debug("Deleting template: %s", key)
-            del Template.TEMPLATES[key]
+            for key in keys_to_remove:
+                logging.debug("Deleting template: %s", key)
+                del Template.TEMPLATES[key]
+    except asyncio.CancelledError:
+        logging.debug("Cleanup task has been cancelled")
 
-cleanup_task = asyncio.Task(cleanup_old_templates())
 
-loop = asyncio.get_event_loop()
-logging.info("Starting Netflow server")
+if __name__ == '__main__':
+    setup_logging()
+    cleanup_task = asyncio.Task(cleanup_old_templates())
 
-listen = loop.create_datagram_endpoint(
-    NetflowServerProtocol, local_addr=("0.0.0.0", 2055)
-)
-transport, protocol = loop.run_until_complete(listen)
+    loop = asyncio.get_event_loop()
+    logging.info("Starting Netflow collector")
 
-try:
-    loop.run_until_complete(cleanup_task)
-    loop.run_forever()
-except KeyboardInterrupt:
-    # Hack to stop an error being displayed and an exit code of 1 being returned
-    # because the cleanup task hasn't completed
-    cleanup_task.set_result(None)
-except Exception as ex:
-    logging.error("Unexpected error raised")
-    logging.exception(ex)
-    raise
-finally:
-    logging.info("Stopping Netflow server")
-    transport.close()
-    loop.close()
+    listen = loop.create_datagram_endpoint(
+        NetflowServerProtocol, local_addr=("0.0.0.0", 2055)
+    )
+    transport, protocol = loop.run_until_complete(listen)
+
+    try:
+        loop.run_until_complete(cleanup_task)
+        loop.run_forever()
+    except KeyboardInterrupt:
+        pass
+    except Exception as ex:
+        logging.error("Unexpected error raised")
+        logging.exception(ex)
+        raise
+    finally:
+        logging.info("Stopping Netflow collector")
+        cleanup_task.cancel()
+        loop.run_until_complete(loop.shutdown_asyncgens())
+        transport.close()
+        loop.stop()
+        loop.close()

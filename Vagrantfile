@@ -10,7 +10,7 @@ Vagrant.configure(2) do |config|
     v.memory = 512
     v.cpus = 1
   end
-  config.vm.box = "debian/contrib-jessie64"
+  config.vm.box = "debian/contrib-stretch64"
   config.vm.provision "shell", inline: <<-SHELL
     sudo apt-get update
     sudo apt-get install -y tcpdump
@@ -21,12 +21,12 @@ Vagrant.configure(2) do |config|
     node.vm.network "private_network", ip: "10.0.0.2", virtualbox_intnet: "ext"
     node.vm.provision "shell", inline: <<-SHELL
       sudo apt-get install -y git module-assistant iptables iptables-dev pkg-config linux-headers-$(uname -r) build-essential
-      git clone git://github.com/aabc/ipt-netflow.git ipt-netflow
+      git clone https://github.com/aabc/ipt-netflow.git ipt-netflow
       cd ipt-netflow
-      m-a prepare
-      ./configure
-      make all install
-      depmod
+      sudo m-a prepare
+      sudo ./configure
+      sudo make all install
+      sudo depmod
     SHELL
     node.vm.provision "shell", run: "always", inline: <<-SHELL
       sudo modprobe ipt_NETFLOW destination=10.0.0.3:2055 protocol=9
