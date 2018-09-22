@@ -43,9 +43,10 @@ Vagrant.configure(2) do |config|
     node.vm.provision "shell", inline: <<-SHELL
       sudo apt install -y python3 python3-pip
       sudo pip3 install ipdb
+      sudo pip3 install -e /vagrant/netflow/
     SHELL
     node.vm.provision "shell", run: "always", inline: <<-SHELL
-      #python3 /vagrant/netflow_exporter.py
+      #python3 /vagrant/netflow/netflow_exporter.py
     SHELL
   end
 end
